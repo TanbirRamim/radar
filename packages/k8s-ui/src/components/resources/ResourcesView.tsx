@@ -330,7 +330,7 @@ const COMPARE_COLUMN_STYLE: React.CSSProperties = {
 
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
-const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+export const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -3071,19 +3071,44 @@ export function getCellFilterKind(kind: string, group?: string): string {
   return `__generic_${normalized}`
 }
 
-// The user's sort preference names a single column, but each kind has its own
-// column set — Age exists everywhere, Restarts only on Pods. Applying a column
-// the current kind doesn't have would sort by an absent value and leave no
-// header arrow to undo it from, so the preference yields to the kind's
-// built-in order there.
+// Display labels for the sortable columns, for surfaces outside the table that
+// name a column without rendering it (the Settings dialog). Not derived from
+// KNOWN_COLUMNS because that map has no single answer: `status` alone renders
+// as Status, Phase, Ready, Synced, Enforcement or Exempts depending on the
+// kind, and a cross-kind setting needs one canonical name. Deriving them by
+// de-camel-casing the key instead gets "Cpu" and "Up To Date", which is not
+// what the header says. Keyed to BUILTIN_SORTABLE_COLUMN_KEYS; a test pins the
+// two to the same set.
+const SORTABLE_COLUMN_LABELS: Record<string, string> = {
+  name: 'Name', namespace: 'Namespace', age: 'Age', status: 'Status',
+  ready: 'Ready', restarts: 'Restarts', type: 'Type', version: 'Version',
+  desired: 'Desired', available: 'Available', upToDate: 'Up-to-date',
+  lastSeen: 'Last Seen', count: 'Count', reason: 'Reason', object: 'Object',
+  cpu: 'CPU', memory: 'Memory', containers: 'Containers',
+}
+
+export function sortColumnLabel(key: string): string | undefined {
+  return SORTABLE_COLUMN_LABELS[key]
+}
+
+// Kind-agnostic sortable columns, in the order the Settings dialog offers them.
+export const CROSS_KIND_SORT_COLUMNS: readonly { key: string; label: string }[] = [
+  'name', 'namespace', 'status', 'age',
+].map((key) => ({ key, label: SORTABLE_COLUMN_LABELS[key] }))
+
+// The user's sort preference names one column, but every kind renders its own
+// set: Age exists everywhere, Restarts only on Pods, and an uncurated CRD shows
+// whatever its printer columns declare. Judge against the keys this table
+// actually renders as sortable - a column it doesn't render would order rows by
+// an absent value, and one it renders without a sort control would drive the
+// order with no header arrow to undo it from.
 export function resolveDefaultSort(
   defaultSort: { column: string; direction: 'asc' | 'desc' } | null | undefined,
-  kind: string,
-  group?: string,
+  sortableColumnKeys: readonly string[],
 ): { column: string | null; direction: SortDirection } {
-  if (!defaultSort?.column) return { column: null, direction: null }
-  const known = getColumnsForKind(kind, group).some(c => c.key === defaultSort.column)
-  if (!known) return { column: null, direction: null }
+  if (!defaultSort?.column || !sortableColumnKeys.includes(defaultSort.column)) {
+    return { column: null, direction: null }
+  }
   return { column: defaultSort.column, direction: defaultSort.direction }
 }
 
@@ -3697,12 +3722,8 @@ export function ResourcesView({
   const deferredSearchTerm = useDeferredValue(searchTerm)
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300, (v) => v === '')
   const [regexMode, setRegexMode] = useState(initialFilters.regex)
-  const [sortColumn, setSortColumn] = useState<string | null>(
-    () => resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group).column,
-  )
-  const [sortDirection, setSortDirection] = useState<SortDirection>(
-    () => resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group).direction,
-  )
+  const [sortColumn, setSortColumn] = useState<string | null>(null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
   const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
@@ -3887,6 +3908,24 @@ export function ResourcesView({
     builtCustomColumns.forEach(c => m.set(c.key, c))
     return m
   }, [extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
+
+  // Sortable columns outside KNOWN_COLUMNS, as a value-stable key list. Keyed
+  // on the joined keys rather than the map itself: a host that rebuilds
+  // extraLeadingColumns on every render would otherwise re-run the sort-apply
+  // effect every render and wipe whatever the user just sorted by.
+  // Keys this table renders with a sort control, joined rather than kept as an
+  // array: a host that rebuilds extraLeadingColumns every render would give an
+  // identity-keyed dependency a new value each time, and the apply effect below
+  // would wipe whatever the user just sorted by on every render.
+  const sortableColumnKeys = useMemo(
+    () => allColumns.filter(c => isColumnSortable(c, extraColumnsByKey)).map(c => c.key).sort().join('\n'),
+    [allColumns, extraColumnsByKey],
+  )
+
+  const canSortBy = useCallback(
+    (column: string) => (sortableColumnKeys ? sortableColumnKeys.split('\n') : []).includes(column),
+    [sortableColumnKeys],
+  )
 
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
@@ -5068,19 +5107,26 @@ export function ResourcesView({
 
   // Sort falls back to the preference on kind change, when the preference is
   // edited in Settings, and when it arrives from the server after mount. All
-  // three are the same operation, so one effect owns them; without the
-  // preference this is the old "reset sort on kind change".
+  // three are the same operation, so one effect owns them; with no preference
+  // set, that operation is a plain reset on kind change.
   const applyDefaultSort = useCallback(() => {
-    const { column, direction } = resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group)
+    const { column, direction } = resolveDefaultSort(
+      defaultSort,
+      sortableColumnKeys ? sortableColumnKeys.split('\n') : [],
+    )
     setSortColumn(column)
     setSortDirection(direction)
-  }, [defaultSort, selectedKind.name, selectedKind.group])
+  }, [defaultSort, sortableColumnKeys])
   useEffect(() => {
     applyDefaultSort()
   }, [applyDefaultSort])
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
+    // The N/A/S shortcuts fire on every kind, including ones with no such
+    // column. Sorting is a no-op there, but the write-back below would still
+    // save it as the preference for every other kind.
+    if (!canSortBy(column)) return
     let newColumn: string | null
     let newDirection: SortDirection
 
@@ -5104,7 +5150,7 @@ export function ResourcesView({
     setSortColumn(newColumn)
     setSortDirection(newDirection)
     onSortChange?.(newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
-  }, [sortColumn, sortDirection, onSortChange])
+  }, [sortColumn, sortDirection, onSortChange, canSortBy])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {

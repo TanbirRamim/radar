@@ -156,13 +156,13 @@ test.describe('Settings dialog — preferences', () => {
     await page.goto('/')
     await page.waitForSelector('header', { timeout: 10000 })
 
-    await page.locator('button[title="Settings"]').click()
+    await page.getByRole('button', { name: 'Settings' }).click()
     await page.getByRole('tab', { name: 'Preferences' }).first().click()
 
     const columnSelect = page.locator('#default-sort-column')
     await expect(columnSelect).toBeVisible()
     await columnSelect.selectOption('age')
-    await page.getByRole('button', { name: 'Descending' }).click()
+    await page.getByRole('button', { name: 'Newest first' }).click()
 
     await expect
       .poll(async () => (await (await request.get('/api/settings')).json()).defaultSort)

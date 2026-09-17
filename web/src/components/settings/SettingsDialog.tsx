@@ -16,7 +16,7 @@ import {
   useOpenCostSummary,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
-import { Input, ResourceRefBadge, SelectMenu, type ResourceRef } from '@skyhook-io/k8s-ui'
+import { Input, ResourceRefBadge, SelectMenu, sortColumnLabel, CROSS_KIND_SORT_COLUMNS, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
@@ -963,13 +963,36 @@ export function SettingsDialog({
 
 // Kind-agnostic columns only: this preference applies to every resource table,
 // and a kind that lacks the chosen column falls back to its built-in order.
+// Names come from the table's own column definitions so the two can't drift.
 const SORT_COLUMNS = [
   { value: '', label: 'Each table’s own default' },
-  { value: 'name', label: 'Name' },
-  { value: 'namespace', label: 'Namespace' },
-  { value: 'status', label: 'Status' },
-  { value: 'age', label: 'Age' },
+  ...CROSS_KIND_SORT_COLUMNS.map((c) => ({ value: c.key, label: c.label })),
 ]
+
+// "Ascending" reads backwards on Age: the table sorts on creationTimestamp, so
+// ascending puts the oldest resources — the largest "40d" values — at the top.
+// At the table you can see the result and correct yourself; here you are choosing
+// blind, so each column names its own directions. A column inherited from a
+// header click can be of any type, so those keep the generic pair.
+const SORT_DIRECTION_LABELS: Record<string, { asc: string; desc: string }> = {
+  name: { asc: 'A → Z', desc: 'Z → A' },
+  namespace: { asc: 'A → Z', desc: 'Z → A' },
+  status: { asc: 'A → Z', desc: 'Z → A' },
+  age: { asc: 'Oldest first', desc: 'Newest first' },
+}
+const GENERIC_DIRECTION_LABELS = { asc: 'Ascending', desc: 'Descending' }
+
+// A header sort saves whatever column the user clicked, including kind-specific
+// ones (Restarts) and user-defined label columns — none of which are in the
+// dropdown. Showing the raw key beats showing "no preference" over an active one.
+function describeSortColumn(key: string): string {
+  const known = sortColumnLabel(key)
+  if (known) return known
+  if (key.startsWith('label:')) return `Label: ${key.slice('label:'.length)}`
+  if (key.startsWith('annotation:')) return `Annotation: ${key.slice('annotation:'.length)}`
+  const spaced = key.replace(/([A-Z])/g, ' $1')
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
 
 function DefaultSortSection({
   defaultSort,
@@ -978,6 +1001,9 @@ function DefaultSortSection({
   defaultSort: DefaultSort | null
   onDefaultSortChange: (sort: DefaultSort | null) => void
 }) {
+  const isListed = SORT_COLUMNS.some((c) => c.value === (defaultSort?.column ?? ''))
+  const directionLabels =
+    (defaultSort && SORT_DIRECTION_LABELS[defaultSort.column]) || GENERIC_DIRECTION_LABELS
   return (
     <div>
       <label htmlFor="default-sort-column" className="block text-sm font-medium text-theme-text-primary mb-1">
@@ -1001,6 +1027,9 @@ function DefaultSortSection({
           {SORT_COLUMNS.map((col) => (
             <option key={col.value} value={col.value}>{col.label}</option>
           ))}
+          {defaultSort && !isListed && (
+            <option value={defaultSort.column}>{describeSortColumn(defaultSort.column)}</option>
+          )}
         </select>
         {defaultSort && (
           <div className="flex gap-2 sm:w-56 shrink-0" role="group" aria-label="Sort direction">
@@ -1017,12 +1046,18 @@ function DefaultSortSection({
                     : 'bg-theme-elevated border-theme-border text-theme-text-secondary hover:text-theme-text-primary'
                 )}
               >
-                {dir === 'asc' ? 'Ascending' : 'Descending'}
+                {directionLabels[dir]}
               </button>
             ))}
           </div>
         )}
       </div>
+      {defaultSort && !isListed && (
+        <p className="mt-2 text-xs text-theme-text-tertiary">
+          Set by sorting a table. This column only exists on some resource kinds — the
+          rest keep their own order.
+        </p>
+      )}
     </div>
   )
 }
