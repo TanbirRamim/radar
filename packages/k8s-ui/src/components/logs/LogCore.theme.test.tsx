@@ -56,6 +56,20 @@ describe('LogCore theme', () => {
     expect(toggle()?.getAttribute('aria-label')).toBe('Switch log viewer to light mode')
   })
 
+  it('returns to the saved choice when a forceDark pin is lifted', async () => {
+    localStorage.setItem('radar-logs-dark', 'false')
+    await render({ forceDark: true, defaultDark: false })
+    expect(toggle()).toBeNull()
+    await render({ defaultDark: false })
+    expect(toggle()?.getAttribute('aria-label')).toBe('Switch log viewer to dark mode')
+  })
+
+  it('ignores a saved value that is not a palette choice', async () => {
+    localStorage.setItem('radar-logs-dark', 'garbage')
+    await render({ defaultDark: false })
+    expect(toggle()?.getAttribute('aria-label')).toBe('Switch log viewer to dark mode')
+  })
+
   it('hides the toggle when forceDark is set', async () => {
     await render({ forceDark: true, defaultDark: false })
     expect(toggle()).toBeNull()

@@ -181,11 +181,16 @@ export function LogCore({
       setIsDark(forceDark)
     }
   }, [forceDark])
-  // Follow host theme changes until the user picks a palette explicitly.
+  // Re-resolve whenever the host's hint changes, including when a forceDark pin
+  // is lifted: the user's saved pick wins, otherwise the host default.
   useEffect(() => {
     if (typeof forceDark === 'boolean') return
     try {
-      if (localStorage.getItem('radar-logs-dark') !== null) return
+      const v = localStorage.getItem('radar-logs-dark')
+      if (v === 'true' || v === 'false') {
+        setIsDark(v === 'true')
+        return
+      }
     } catch {}
     setIsDark(defaultDark)
   }, [defaultDark, forceDark])
